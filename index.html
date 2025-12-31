@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Lễ Hội Pháo Hoa Đa Dạng</title>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; cursor: crosshair; }
+        canvas { display: block; }
+        #overlay {
+            position: absolute; top: 10px; left: 10px;
+            color: white; font-family: 'Segoe UI', sans-serif;
+            pointer-events: none; text-shadow: 2px 2px 4px #000;
+        }
+    </style>
+</head>
+<body>
+    <div id="overlay">Nhấp chuột để bắn - Âm thanh nổ rộn ràng</div>
+    <canvas id="canvas"></canvas>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let width, height;
+
+function resize() {
+    width = canvas.width = window.innerWidth;
+    height = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// --- Hệ thống âm thanh nâng cao ---
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+function playFireworkSound(type) {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    
+    const masterGain = audioCtx.createGain();
+    masterGain.connect(audioCtx.destination);
+
+    if (type === 'whistle') {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(1500, audioCtx.currentTime + 0.8);
+        gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.8);
+        osc.connect(gain);
+        gain.connect(masterGain);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.8);
+    } else {
+        // Tiếng nổ (Sử dụng White Noise để thật hơn)
+        const bufferSize = audioCtx.sampleRate * 0.5;
+        const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) { data[i] = Math.random() * 2 - 1; }
+
+        const noise = audioCtx.createBufferSource();
+        noise.buffer = buffer;
+
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(1000, audioCtx.currentTime);
+        filter.frequency.exponentialRampToValueAtTime(10, audioCtx.currentTime + 0.4);
+
+        const gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+
+        noise.connect(filter);
+        filter.connect(gain);
+        gain.connect(masterGain);
+        noise.start();
+    }
+}
+
+// --- Công thức tạo hình ---
+function getShapePoints(type) {
+    const points = [];
+    if (type === 'heart') {
+        for (let i = 0; i < 100; i++) {
+            const angle = (i / 100) * Math.PI * 2;
+            // Công thức hình trái tim toán học
+            const x = 16 * Math.pow(Math.sin(angle), 3);
+            const y = -(13 * Math.cos(angle) - 5 * Math.cos(2 * angle) - 2 * Math.cos(3 * angle) - Math.cos(4 * angle));
+            points.push({x: x * 1.5, y: y * 1.5});
+        }
+    } else if (type === 'stickman') {
+        return [
+            {x:0, y:-40}, {x:5, y:-45}, {x:-5, y:-45}, {x:0, y:-50}, // Đầu
+            {x:0, y:-30}, {x:0, y:-15}, {x:0, y:0}, // Thân
+            {x:-15, y:-20}, {x:-30, y:-10}, {x:15, y:-20}, {x:30, y:-10}, // Tay
+            {x:-15, y:20}, {x:-25, y:40}, {x:15, y:20}, {x:25, y:40} // Chân
+        ];
+    } else {
+        // Hình tròn (Circle)
+        for (let i = 0; i < 100; i++) {
+            const angle = (i / 100) * Math.PI * 2;
+            points.push({x: Math.cos(angle) * 25, y: Math.sin(angle) * 25});
+        }
+    }
+    return points;
+}
+
+class Particle {
+    constructor(x, y, color, vx, vy) {
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        this.vx = vx;
+        this.vy = vy;
+        this.alpha = 1;
+        this.gravity = 0.05;
+        this.friction = 0.97;
+    }
+    update() {
+        this.vx *= this.friction;
+        this.vy *= this.friction;
+        this.vy += this.gravity;
+        this.x += this.vx;
+        this.y += this.vy;
+        this.alpha -= 0.01;
+    }
+    draw() {
+        ctx.globalAlpha = this.alpha;
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 2, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+class Firework {
+    constructor() {
+        this.x = Math.random() * width;
+        this.y = height;
+        this.targetY = Math.random() * (height * 0.4) + 100;
+        this.color = `hsl(${Math.random() * 360}, 100%, 60%)`;
+        this.velocity = 8 + Math.random() * 4;
+        this.exploded = false;
+        this.particles = [];
+        this.type = ['circle', 'heart', 'stickman'][Math.floor(Math.random() * 3)];
+        playFireworkSound('whistle');
+    }
+
+    update() {
+        if (!this.exploded) {
+            this.y -= this.velocity;
+            if (this.y <= this.targetY) this.explode();
+        } else {
+            for (let i = this.particles.length - 1; i >= 0; i--) {
+                this.particles[i].update();
+                if (this.particles[i].alpha <= 0) this.particles.splice(i, 1);
+            }
+        }
+    }
+
+    explode() {
+        this.exploded = true;
+        playFireworkSound('explosion');
+        const shape = getShapePoints(this.type);
+        
+        // Tạo chùm dày
+        for (let i = 0; i < 300; i++) {
+            const point = shape[i % shape.length];
+            const force = (Math.random() * 0.5 + 0.8);
+            this.particles.push(new Particle(
+                this.x, this.y, this.color, 
+                point.x * force * 0.3 + (Math.random()-0.5)*2, 
+                point.y * force * 0.3 + (Math.random()-0.5)*2
+            ));
+        }
+    }
+
+    draw() {
+        if (!this.exploded) {
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
+            ctx.fill();
+        } else {
+            this.particles.forEach(p => p.draw());
+        }
+    }
+}
+
+let fireworks = [];
+
+function animate() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+    ctx.fillRect(0, 0, width, height);
+
+    if (Math.random() < 0.05) fireworks.push(new Firework());
+
+    for (let i = fireworks.length - 1; i >= 0; i--) {
+        fireworks[i].update();
+        fireworks[i].draw();
+        if (fireworks[i].exploded && fireworks[i].particles.length === 0) {
+            fireworks.splice(i, 1);
+        }
+    }
+    requestAnimationFrame(animate);
+}
+
+window.addEventListener('mousedown', (e) => {
+    const fw = new Firework();
+    fw.x = e.clientX;
+    fw.targetY = e.clientY;
+    fireworks.push(fw);
+});
+
+animate();
+</script>
+</body>
+</html>
